@@ -674,6 +674,8 @@ def _createTracToGithubUserMap(hub, definition):
                 raise _ConfigError(_OPTION_USERS, u'Trac user must not be empty: "%s"' % mapping)
             if len(githubUser) == 0:
                 raise _ConfigError(_OPTION_USERS, u'Github user must not be empty: "%s"' % mapping)
+            if tracUser == '""':
+                tracUser = ''
             existingMappedGithubUser = result.get(tracUser)
             if existingMappedGithubUser is not None:
                 raise _ConfigError(_OPTION_USERS,
