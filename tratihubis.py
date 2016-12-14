@@ -727,7 +727,12 @@ def main(argv=None):
         _log.info(u'log on to github as user "%s"', user)
         hub = github.Github(user, password)
         _log.info(u'connect to github repo "%s"', repoName)
-        repo = hub.get_user().get_repo(repoName)
+        if '/' in repoName:
+            owner, repoName = repoName.split('/',1)
+        else:
+            owner = user
+        repo = hub.get_user(owner).get_repo(repoName)
+        _log.info(u'connected to %r', repo)
         migrateTickets(hub, repo, ticketsCsvPath, commentsCsvPath, attachmentsCsvPath, userMapping=userMapping,
                 labelMapping=labelMapping, attachmentsPrefix=attachmentsPrefix, pretend=not options.really)
         exitCode = 0
