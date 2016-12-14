@@ -603,8 +603,10 @@ def migrateTickets(hub, repo, ticketsCsvPath, commentsCsvPath=None, attachmentsC
             if commentsToAdd is not None:
                 for comment in commentsToAdd:
                     commentAuthor = _githubUserFor(repo, tracToGithubUserMap, comment['author'], False)
-                    commentBody = u'_Trac comment by %s on %s:_\n\n%s' %\
-                                  (comment['author'], comment['date'], comment['body'])
+                    commentBody = u'_Trac comment%s on %s:_\n\n%s' % (
+                        ' by %s' % comment['author'] if comment['author'] else '', 
+                        comment['date'], 
+                        comment['body'])
                     _log.info(u'  add comment by %s: %r', commentAuthor, _shortened(commentBody))
                     if not pretend:
                         assert issue is not None
@@ -686,6 +688,8 @@ def _createTracToGithubUserMap(hub, definition):
 def _githubUserFor(hub, tracToGithubUserMap, tracUser, validate=True):
     assert tracToGithubUserMap is not None
     assert tracUser is not None
+    if not tracUser and not validate:
+        return u''
     result = tracToGithubUserMap.get(tracUser)
     if result is None:
         result = tracToGithubUserMap.get('*')
