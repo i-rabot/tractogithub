@@ -213,17 +213,29 @@ import sys
 import token
 import tokenize
 import datetime
+import time
+import collections
 
+LEGACY_COMMENT_TEMPLATE=u"""_Imported from trac ticket {id}.
+Created by {reporter}
+Opened: {createdtime}
+Last modified: {modifiedtime}_"""
+
+FORMAT = "%(asctime)-15s %(levelname)-5.5s %(message)s"
+logging.basicConfig(level=logging.INFO, format=FORMAT)
 _log = logging.getLogger('tratihubis')
 
 __version__ = "0.5"
 
+ALLOWED_PER_MIN = 20
+LIMIT_BUFFER = 10
 _SECTION = 'tratihubis'
 _OPTION_LABELS = 'labels'
 _OPTION_USERS = 'users'
 
 _validatedGithubUsers = {}
 _hub = None
+_calls = collections.deque()
 
 _FakeMilestone = collections.namedtuple('_FakeMilestone', ['number', 'title'])
 _FakeIssue = collections.namedtuple('_FakeIssue', ['number', 'title', 'body', 'state'])
@@ -291,6 +303,7 @@ class _LabelTransformations(object):
     def _buildLabelMap(self):
         _log.info(u'analyze existing labels')
         self._labelMap = {}
+        _apiPauseIfNeeded()
         for label in self.repo.get_labels():
             _log.debug(u'  found label "%s"', label.name)
             self._labelMap[label.name] = label
@@ -424,6 +437,7 @@ def _tracTicketMaps(ticketsCsvPath):
 
 def _createMilestoneMap(repo):
     def addMilestones(targetMap, state):
+        _apiPauseIfNeeded()
         for milestone in repo.get_milestones(state=state):
             _log.debug(u'  %d: %s', milestone.number, milestone.title)
             targetMap[milestone.title] = milestone
@@ -437,6 +451,7 @@ def _createMilestoneMap(repo):
 
 def _createIssueMap(repo):
     def addIssues(targetMap, state):
+        _apiPauseIfNeeded()
         for issue in repo.get_issues(state=state):
             _log.debug(u'  %s: (%s) %s', issue.number, issue.state, issue.title)
             targetMap[issue.number] = issue
@@ -516,12 +531,19 @@ def _createTicketsToAttachmentsMap(attachmentsCsvPath, attachmentsPrefix):
                     result[attachmentMap['id']].append(attachmentMap)
             else:
                 hasReadHeader = True
-
     return result
 
 
-def migrateTickets(repo, ticketsCsvPath, commentsCsvPath=None, attachmentsCsvPath=None, firstTicketIdToConvert=1,
-        lastTicketIdToConvert=0, labelMapping=None, userMapping="*:*", attachmentsPrefix=None, pretend=True):
+def migrateTickets(repo, 
+        ticketsCsvPath, 
+        commentsCsvPath=None, 
+        attachmentsCsvPath=None, 
+        firstTicketIdToConvert=1,
+        lastTicketIdToConvert=0, 
+        labelMapping=None, 
+        userMapping="*:*", 
+        attachmentsPrefix=None, 
+        pretend=True):
     assert _hub is not None
     assert repo is not None
     assert ticketsCsvPath is not None
@@ -552,12 +574,14 @@ def migrateTickets(repo, ticketsCsvPath, commentsCsvPath=None, attachmentsCsvPat
             githubAssignee = _githubUserFor(tracToGithubUserMap, tracOwner)
             githubAssignee = _getGitHubUser(githubAssignee)
             milestoneTitle = ticketMap['milestone'].strip()
-            if len(milestoneTitle) != 0:
+            if milestoneTitle:
                 if milestoneTitle not in existingMilestones:
                     _log.info(u'add milestone: %s', milestoneTitle)
                     print existingMilestones
                     if not pretend:
+                        _apiPauseIfNeeded(True)
                         newMilestone = repo.create_milestone(milestoneTitle)
+                        _apiCreationIncrement()
                     else:
                         newMilestone = _FakeMilestone(len(existingMilestones) + 1, milestoneTitle)
                     existingMilestones[milestoneTitle] = newMilestone
@@ -568,10 +592,12 @@ def migrateTickets(repo, ticketsCsvPath, commentsCsvPath=None, attachmentsCsvPat
                 milestoneNumber = 0
             _log.info(u'convert ticket #%d: %s', ticketId, _shortened(title))
             if not pretend:
+                _apiPauseIfNeeded(True)
                 if milestone is None:
                     issue = repo.create_issue(title, body, githubAssignee)
                 else:
                     issue = repo.create_issue(title, body, githubAssignee, milestone)
+                _apiCreationIncrement()
             else:
                 issue = _FakeIssue(fakeIssueId, title, body, 'open')
                 fakeIssueId += 1
@@ -580,12 +606,11 @@ def migrateTickets(repo, ticketsCsvPath, commentsCsvPath=None, attachmentsCsvPat
             labels = []
             possiblyAddLabel(labels, 'type', ticketMap['type'])
             possiblyAddLabel(labels, 'resolution', ticketMap['resolution'])
-            if len(labels) > 0:
+            if labels:
+                _apiPauseIfNeeded()
                 issue.edit(labels=labels)
 
-            legacyInfo = u"_Imported from trac issue %d.  Created by %s on %s, last modified: %s_\n" \
-                         % (ticketId, ticketMap['reporter'], ticketMap['createdtime'].isoformat(),
-                         ticketMap['modifiedtime'].isoformat())
+            legacyInfo = LEGACY_COMMENT_TEMPLATE.format(**ticketMap)
             attachmentsToAdd = tracTicketToAttachmentsMap.get(ticketId)
             if attachmentsToAdd is not None:
                 for attachment in attachmentsToAdd:
@@ -595,8 +620,7 @@ def migrateTickets(repo, ticketsCsvPath, commentsCsvPath=None, attachmentsCsvPat
                 _log.info(u'  added attachment from %s', attachmentAuthor)
 
             if not pretend:
-                assert issue is not None
-                issue.create_comment(legacyInfo)
+                _addGitHubIssueComment(issue, legacyInfo)
 
             commentsToAdd = tracTicketToCommentsMap.get(ticketId)
             if commentsToAdd is not None:
@@ -608,14 +632,21 @@ def migrateTickets(repo, ticketsCsvPath, commentsCsvPath=None, attachmentsCsvPat
                         comment['body'])
                     _log.info(u'  add comment by %s: %r', commentAuthor, _shortened(commentBody))
                     if not pretend:
-                        assert issue is not None
-                        issue.create_comment(commentBody)
+                        _addGitHubIssueComment(issue, commentBody)
             if ticketMap['status'] == 'closed':
                 _log.info(u'  close issue')
                 if not pretend:
+                    _apiPauseIfNeeded()
                     issue.edit(state='closed')
         else:
             _log.info(u'skip ticket #%d: %s', ticketId, title)
+
+
+def _addGitHubIssueComment(issue, commentBody):
+    assert issue is not None
+    _apiPauseIfNeeded(True)
+    issue.create_comment(commentBody)
+    _apiCreationIncrement()
 
 
 def _parsedOptions(arguments):
@@ -654,16 +685,6 @@ def _validateGithubUser(tracUser, githubUser):
         raise _ConfigError(_OPTION_USERS,
                 u'Trac user "%s" must be mapped to an existing Github user instead of "%s"'
                 % (tracUser, githubUser))
-
-
-def _getGitHubUser(username):
-    assert _hub is not None
-    if username not in _validatedGithubUsers:
-        _log.debug(u'  check for Github user "%s"', username)
-        userObject = _hub.get_user(username)
-        _validatedGithubUsers[username] = userObject
-        return userObject
-    return _validatedGithubUsers[username]
 
 
 def _createTracToGithubUserMap(definition):
@@ -709,6 +730,67 @@ def _githubUserFor(tracToGithubUserMap, tracUser, validate=True):
     return result
 
 
+def _getGitHubUser(username):
+    assert _hub is not None
+    if username not in _validatedGithubUsers:
+        _log.debug(u'  check for Github user "%s"', username)
+        _apiPauseIfNeeded()
+        userObject = _hub.get_user(username)
+        _validatedGithubUsers[username] = userObject
+        return userObject
+    return _validatedGithubUsers[username]
+
+
+def _apiPauseIfNeeded(iscreation=False):
+    """
+    GitHub only allows so many requests per period...
+    """
+    if iscreation:
+        _apiCreationRequestPause()
+    _apiTotalRequestPause()
+
+
+def _apiCreationRequestPause():
+    # only ALLOWED_PER_MIN creation requests per min
+    def calcCount():
+        pastmin = datetime.datetime.now() - datetime.timedelta(seconds=61)
+        while _calls and _calls[0][1] < pastmin:
+            _calls.popleft()
+        return sum(c[0] for c in _calls)
+    callcnt = calcCount()
+    _log.debug("\t\t\t%d creations in last min" % callcnt)
+    while callcnt >= ALLOWED_PER_MIN:
+        since = (datetime.datetime.now() - _calls[0][1]).seconds
+        sec = max(1, 61 - since)
+        _log.info("BREATHER: GitHub gets mad if over %d creation "
+            "calls per minute.  We've made %d.  Sleep for %d sec" % 
+            (ALLOWED_PER_MIN, callcnt, sec))
+        time.sleep(sec)
+        callcnt = calcCount()
+        
+
+def _apiTotalRequestPause():
+    # Also only allow so many total requests per hour
+    #_log.debug("\t\t\t%d api requests remaining" % _hub.rate_limiting[0])
+    while _hub.rate_limiting[0] < LIMIT_BUFFER:
+        seconds = max(15, _hub.rate_limiting_resettime - time.time())
+        _log.info("GitHub rate limited: only %d of %d left, "
+            "sleep for %.2f seconds (until %s)" % (
+                _hub.rate_limiting + (
+                seconds,
+                datetime.datetime.now()
+                    + datetime.timedelta(seconds=seconds))))
+        time.sleep(seconds)
+        _hub.get_rate_limit()
+
+
+def _apiCreationIncrement(cnt=1):
+    # avoid user.creation_rate_limit_exceeded
+    # Limits and what counts as such an event are not
+    # documented.. guessing
+    _calls.append((cnt, datetime.datetime.now()))
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv
@@ -737,10 +819,17 @@ def main(argv=None):
             owner = _getGitHubUser(owner)
         else:
             owner = _hub.get_user()
+        _apiPauseIfNeeded()
         repo = owner.get_repo(repoName)
         _log.info(u'connected to %r', repo)
-        migrateTickets(repo, ticketsCsvPath, commentsCsvPath, attachmentsCsvPath, userMapping=userMapping,
-                labelMapping=labelMapping, attachmentsPrefix=attachmentsPrefix, pretend=not options.really)
+        migrateTickets(repo, 
+            ticketsCsvPath, 
+            commentsCsvPath, 
+            attachmentsCsvPath, 
+            userMapping=userMapping,
+            labelMapping=labelMapping, 
+            attachmentsPrefix=attachmentsPrefix, 
+            pretend=not options.really)
         exitCode = 0
     except (EnvironmentError, OSError, _ConfigError, _CsvDataError), error:
         _log.error(error)
