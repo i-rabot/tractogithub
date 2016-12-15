@@ -219,7 +219,7 @@ import collections
 LEGACY_COMMENT_TEMPLATE=u"""_Imported from trac ticket {id}.
 Created by {reporter}
 Opened: {createdtime}
-Last modified: {modifiedtime}_"""
+Last modified: {modifiedtime}{freshdesk}_"""
 
 FORMAT = "%(asctime)-15s %(levelname)-5.5s %(message)s"
 logging.basicConfig(level=logging.INFO, format=FORMAT)
@@ -405,7 +405,7 @@ def _tracTicketMaps(ticketsCsvPath):
     Sequence of maps where each items describes the relevant fields of each row from the tickets CSV exported
     from Trac.
     """
-    EXPECTED_COLUMN_COUNT = 11
+    EXPECTED_COLUMN_COUNT = 12
     _log.info(u'read ticket details from "%s"', ticketsCsvPath)
     with open(ticketsCsvPath, "rb") as ticketCsvFile:
         csvReader = _UnicodeCsvReader(ticketCsvFile)
@@ -429,6 +429,8 @@ def _tracTicketMaps(ticketsCsvPath):
                     'description': row[8],
                     'createdtime': datetime.datetime.fromtimestamp(long(row[9])),
                     'modifiedtime': datetime.datetime.fromtimestamp(long(row[10])),
+                    'freshdesk': row[11] and 
+                        u"\nFreshdesk: https://retailarchitects.freshdesk.com/helpdesk/tickets/%s" % row[11],
                 }
                 yield ticketMap
             else:

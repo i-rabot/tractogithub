@@ -10,8 +10,10 @@ select
     summary,
     description,
     time / 1000000 as PosixTime,
-    modified / 1000000 as ModifiedTime
-from
-    ticket
+    changetime / 1000000 as ModifiedTime,
+    value as freshdesk
+from ticket
+left outer join ticket_custom 
+    on ticket_custom.ticket = ticket.id and name = 'freshdesk_ticket'
 order
     by id
