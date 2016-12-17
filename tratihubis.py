@@ -220,7 +220,7 @@ import re
 TIMESTAMP_FORMAT = "%b %d, %Y, %-I:%M:%S %p"
 
 LEGACY_HEADER_TEMPLATE = u"""_Imported from trac ticket {id}.
-Created by {reporter}
+Created by **{reporter}**
 Opened in trac: {createdtime}
 Last modified in trac: {modifiedtime}{freshdesk}_"""
 
@@ -750,9 +750,9 @@ def migrateTickets(repo,
             for comment in commentsToAdd[issue.comments:]:
                 if comment['type'] == 'comment':
                     comment['body'] = _convertWikiToMd(comment['body'], comment['id'])
-                commentBody = u'_Trac %s%s on %s:_%s%s' % (
+                commentBody = u'_%strac %s on %s:_%s%s' % (
+                    '**%s** ' % comment['author'] if comment['author'] else '',
                     comment['type'],
-                    ' by %s' % comment['author'] if comment['author'] else '', 
                     comment['date'],
                     comment['padding'],
                     comment['body'])
