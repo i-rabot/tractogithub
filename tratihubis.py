@@ -217,7 +217,7 @@ import time
 import collections
 import re
 
-TIMESTAMP_FORMAT = "%b %d, %Y, %-I:%M:%S %p"
+TIMESTAMP_FORMAT = "%b %-d, %Y, %-I:%M:%S %p"
 
 LEGACY_HEADER_TEMPLATE = u"""_Imported from trac ticket {id}.
 Created by **{reporter}**
@@ -246,7 +246,7 @@ _log = logging.getLogger('tratihubis')
 
 __version__ = "0.5"
 
-ALLOWED_PER_MIN = 20
+ALLOWED_PER_MIN = 19
 LIMIT_BUFFER = 10
 _NOTSET = github.GithubObject.NotSet
 _SECTION = 'tratihubis'
