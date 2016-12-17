@@ -39,10 +39,23 @@ from trac.util.translation import _
 from trac.wiki.api import WikiSystem, parse_args, unquote_label
 from trac.wiki.parser import WikiParser, parse_processor_args
 
-__all__ = ['wiki_to_html', 'wiki_to_oneliner', 'wiki_to_outline',
-           'Formatter', 'format_to', 'format_to_html', 'format_to_oneliner',
-           'extract_link', 'split_url_into_path_query_fragment',
-           'concat_path_query_fragment']
+__all__ = ['trac_to_github']
+
+
+_gitpath=None
+_currentticket=None
+
+def trac_to_github(text, gitpath=None, currentticket=None):
+    global _gitpath
+    global _currentticket
+    if gitpath:
+        _gitpath = gitpath
+    if currentticket is not None:
+        _currentticket = currentticket
+    out = StringIO()
+    Formatter().format(text, out, False)
+    return out.getvalue()
+
 
 
 def system_message(msg, text=None):
@@ -118,6 +131,57 @@ class WikiProcessor(object):
     _block_elem_re = re.compile(r'^\s*<(?:div|table)(?:\s+[^>]+)?>',
                                 re.I | re.M)
 
+
+    GITHUBLANGS = set([
+        'apache',
+        'applescript',
+        'avrasm',
+        'axapta',
+        'bash',
+        'clojure',
+        'cmake',
+        'coffeescript',
+        'cpp',
+        'cs',
+        'css',
+        'd',
+        'delphi',
+        'diff',
+        'django',
+        'dos',
+        'erlang',
+        'erlang-repl',
+        'glsl',
+        'haskell',
+        'ini',
+        'java',
+        'javascript',
+        'json',
+        'lc',
+        'lisp',
+        'markdown',
+        'matlab',
+        'mel',
+        'nginx',
+        'objectivec',
+        'parser3',
+        'perl',
+        'php',
+        'profile',
+        'python',
+        'rib',
+        'rsl',
+        'ruby',
+        'rust',
+        'smalltalk',
+        'sql',
+        'tex',
+        'vala',
+        'vhdl',
+        'xml',
+    ])
+
+
     def __init__(self, formatter, name, args=None):
         """Find the processor by name
         
@@ -135,6 +199,7 @@ class WikiProcessor(object):
         self.macro_provider = None
 
         # FIXME: move these tables outside of __init__
+        """
         builtin_processors = {'html': self._html_processor,
                               'htmlcomment': self._htmlcomment_processor,
                               'default': self._default_processor,
@@ -148,15 +213,27 @@ class WikiProcessor(object):
                               'tr': self._tr_processor,
                               'table': self._table_processor,
                               }
+        """
+
+        # GitHub converted ones:
+        builtin_processors = {'default': self._default_processor,
+                              'CommitTicketReference': self._CommitTicketReference_processor,
+                              }
 
         self.inline_check = {'html': self._html_is_inline,
                                 'htmlcomment': True, 'comment': True,
                                 'span': True, 'Span': True,
                                 }.get(name)
 
-        self._sanitizer = TracHTMLSanitizer(formatter.wiki.safe_schemes)
-        
+        #self._sanitizer = TracHTMLSanitizer(formatter.wiki.safe_schemes)
         self.processor = builtin_processors.get(name)
+
+        if not self.processor:
+            self.processor = self._default_processor
+
+        ##            
+        return
+        
         if not self.processor:
             # Find a matching wiki macro
             for macro_provider in WikiSystem(self.env).macro_providers:
@@ -207,7 +284,15 @@ class WikiProcessor(object):
         return ''
 
     def _default_processor(self, text):
-        return tag.pre(text, class_="wiki")
+        if self.name.lower() in self.GITHUBLANGS:
+            langtoken = self.name
+        else:
+            langtoken = ''
+        return u"```%s\n%s```" % (langtoken, text)
+
+    def _CommitTicketReference_processor(self, text):
+        # just convert the contents as normal
+        return trac_to_github(text)
 
     def _html_processor(self, text):
         if WikiSystem(self.env).render_unsafe_content:
@@ -393,6 +478,17 @@ class WikiProcessor(object):
         return text
 
 
+from trac.core import Component, ComponentManager
+class FakeEnvironment(Component, ComponentManager):
+    def __init__(self):
+        self.components = {}
+        self.enabled = {}
+
+    def component_activated(self, comp):
+        comp.env = self
+
+        
+
 class Formatter(object):
     """Base Wiki formatter.
 
@@ -406,23 +502,13 @@ class Formatter(object):
     QUOTED_STRING = WikiParser.QUOTED_STRING
     LINK_SCHEME = WikiParser.LINK_SCHEME
 
-    def __init__(self, env, context):
+    def __init__(self):
         """Note: `req` is still temporarily used."""
-        self.env = env
-        self.context = context.child()
-        self.context.set_hints(disable_warnings=True)
-        self.req = context.req
-        self.href = context.href
-        self.resource = context.resource
-        self.perm = context.perm
-        self.wiki = WikiSystem(self.env)
+        self.env = FakeEnvironment()
         self.wikiparser = WikiParser(self.env)
         self._anchors = {}
         self._open_tags = []
-        self._safe_schemes = None
-        if not self.wiki.render_unsafe_content:
-            self._safe_schemes = set(self.wiki.safe_schemes)
-            
+        self._safe_schemes = None            
 
     def split_link(self, target):
         return split_url_into_path_query_fragment(target)
@@ -430,10 +516,10 @@ class Formatter(object):
     # -- Pre- IWikiSyntaxProvider rules (Font styles)
 
     _indirect_tags = {
-        'MM_BOLD': ('<strong>', '</strong>'),
-        'WC_BOLD': ('<strong>', '</strong>'),
-        'MM_ITALIC': ('<em>', '</em>'),
-        'WC_ITALIC': ('<em>', '</em>'),
+        'MM_BOLD': ('**', '**'),
+        'WC_BOLD': ('**', '**'),
+        'MM_ITALIC': ('_', '_'),
+        'WC_ITALIC': ('_', '_'),
         'MM_UNDERLINE': ('<span class="underline">', '</span>'),
         'MM_STRIKE': ('<del>', '</del>'),
         'MM_SUBSCRIPT': ('<sub>', '</sub>'),
@@ -489,6 +575,47 @@ class Formatter(object):
                 break
         return tmp
 
+    def _ticketref_formatter(self, match, fullmatch):
+        """ #123 """
+        return self._ticketref(match, long(fullmatch.group('ticketid')))
+
+    def _ticketref(self, match, ticketid):
+        if not _currentticket or ticketid <= _currentticket:
+            # As-is and allow github to link
+            return u"#%d" % ticketid
+        # ticketid hasn't been created yet and so github
+        # will not create link to it, even after it has been, so
+        # manually link:
+        return u"[%s](%d)" % (match, ticketid)
+
+    def _revision_formatter(self, match, fullmatch):
+        return self._svn_rev(match, fullmatch.group('rev'))
+
+    def _revision2_formatter(self, match, fullmatch):
+        return self._svn_rev(match, fullmatch.group('rev2'))
+
+    def _svn_rev(self, match, revision):
+        if _gitpath:
+            git_commit = self.git_commit_from_svn_rev(revision)
+            if git_commit:
+                # [r1233](../commit/1458f373a79e332c7ad81caa3ea3b6a63f588be1)
+                return u"[%s](../commit/%s)" % (match, git_commit)
+        return match
+
+    def git_commit_from_svn_rev(self, svn_rev):
+        # Find git commit for svn revision
+        return self._command_from_trunk([
+            'git',
+            'log',
+            '--no-color',
+            '--pretty=format:%H',
+            '--grep=git-svn-id: .*trunk@%s ' % svn_rev])[0] or None
+
+    def _command_from_trunk(self, cmd):
+        os.chdir(_gitpath)
+        from subprocess import Popen, PIPE
+        return Popen(cmd, stdout=PIPE, stderr=PIPE).communicate()        
+
     def _indirect_tag_handler(self, match, tag):
         """Handle binary inline style tags (indirect way, 0.12)"""
         if self.tag_open_p(tag):
@@ -532,7 +659,7 @@ class Formatter(object):
         return self._indirect_tag_handler(match, 'MM_SUPERSCRIPT')
 
     def _inlinecode_formatter(self, match, fullmatch):
-        return tag.tt(fullmatch.group('inline'))
+        return u"```%s```" % fullmatch.group('inline')
 
     def _inlinecode2_formatter(self, match, fullmatch):
         return tag.tt(fullmatch.group('inline2'))
@@ -573,22 +700,36 @@ class Formatter(object):
 
     def _shrefbr_formatter(self, match, fullmatch):
         ns = fullmatch.group('snsbr')
-        target = unquote_label(fullmatch.group('stgtbr'))
+        target = fullmatch.group('stgtbr')
+        # <> brackets:
         match = match[1:-1]
-        return '&lt;%s&gt;' % \
-                self._make_link(ns, target, match, match, fullmatch)
+        return self._trac_link(match, target, ns)
 
     def _shref_formatter(self, match, fullmatch):
+        # protect links by capturing in regex, but just return as is
         ns = fullmatch.group('sns')
-        target = unquote_label(fullmatch.group('stgt'))
-        return self._make_link(ns, target, match, match, fullmatch)
+        target = fullmatch.group('stgt')
+        return self._trac_link(match, target, ns)
+
+    def _trac_link(self, match, target, ns):
+        if ns == 'wiki':
+            return u"[%s](%s)" % (target,
+                "https://trac.retailarchitects.com/trac/wiki/%s" % target)
+        if ns == 'ticket':
+            # ticket:123
+            return self._ticketref(match, long(target))
+        return match        
 
     def _lhref_formatter(self, match, fullmatch):
         rel = fullmatch.group('rel')
         ns = fullmatch.group('lns')
-        target = unquote_label(fullmatch.group('ltgt'))
+        target = fullmatch.group('ltgt')
         label = fullmatch.group('label')
-        return self._make_lhref_link(match, fullmatch, rel, ns, target, label)
+        if not label:
+            # don't attempt
+            return match
+        return u"[%s](%s)" % (label,
+            match[1:match.index(label)].strip())
 
     def _make_lhref_link(self, match, fullmatch, rel, ns, target, label):
         if not label: # e.g. `[http://target]` or `[wiki:target]`
@@ -780,7 +921,7 @@ class Formatter(object):
         htext = fullmatch.group('htext').strip()
         if htext.endswith(hdepth):
             htext = htext[:-depth]
-        heading = format_to_oneliner(self.env, self.context, htext, False)
+        heading = format_to_oneliner(self.env, None, htext, False)
         if anchor:
             anchor = anchor[1:]
         else:
@@ -796,7 +937,7 @@ class Formatter(object):
             i += 1
         self._anchors[anchor] = True
         if shorten:
-            heading = format_to_oneliner(self.env, self.context, htext, True)
+            heading = format_to_oneliner(self.env, None, htext, True)
         return (depth, heading, anchor)
 
     def _heading_formatter(self, match, fullmatch):
@@ -806,8 +947,7 @@ class Formatter(object):
         self.close_list()
         self.close_def_list()
         depth, heading, anchor = self._parse_heading(match, fullmatch, False)
-        self.out.write('<h%d id="%s">%s</h%d>' %
-                       (depth, anchor, heading, depth))
+        return u"#"*depth + u" " + heading
 
     # Generic indentation (as defined by lists and quotes)
 
@@ -955,7 +1095,7 @@ class Formatter(object):
                 self._quote_stack.append(d)
                 self._set_tab(d)
                 class_attr = ' class="citation"' if citation else ''
-                self.out.write('<blockquote%s>' % class_attr + os.linesep)
+                #self.out.write('<blockquote%s>' % class_attr + os.linesep)
             if citation:
                 for d in range(quote_depth+1, depth+1):
                     open_one_quote(d)
@@ -965,7 +1105,7 @@ class Formatter(object):
             self.close_table()
             self.close_paragraph()
             self._quote_stack.pop()
-            self.out.write('</blockquote>' + os.linesep)
+            #self.out.write('</blockquote>' + os.linesep)
         quote_depth = self._get_quote_depth()
         if depth > quote_depth:
             self._set_tab(depth)
@@ -1086,13 +1226,13 @@ class Formatter(object):
 
     def open_paragraph(self):
         if not self.paragraph_open:
-            self.out.write('<p>' + os.linesep)
+#            self.out.write(os.linesep)
             self.paragraph_open = 1
 
     def close_paragraph(self):
         self.flush_tags()
         if self.paragraph_open:
-            self.out.write('</p>' + os.linesep)
+#            self.out.write(os.linesep)
             self.paragraph_open = 0
 
     # Code blocks
@@ -1156,29 +1296,13 @@ class Formatter(object):
 
     def handle_quote_block(self, line):
         self.close_paragraph()
-        depth = line.find('>')
-        # Close lists up to current level:
-        #
-        #  - first level item
-        #    - second level item
-        #    > citation part of first level item
-        #
-        #  (depth == 3, _list_stack == [1, 3])
-        if not self._quote_buffer and depth < self._get_list_depth():
-            self.close_list(depth)
-        self._quote_buffer.append(line[depth + 1:])
+        self._quote_buffer.append(line + "\n")
         
     def close_quote_block(self, escape_newlines):
         if self._quote_buffer:
-            # avoid an extra <blockquote> when there's consistently one space
-            # after the '>' 
-            if all(not line or line[0] in '> ' for line in self._quote_buffer):
-                self._quote_buffer = [line[bool(line and line[0] == ' '):]
-                                      for line in self._quote_buffer]
-            self.out.write('<blockquote class="citation">\n')
-            Formatter(self.env, self.context).format(self._quote_buffer,
-                                                     self.out, escape_newlines)
-            self.out.write('</blockquote>\n')
+            # for github, use whole quote as it, but protected from syntaxing...
+            map(self.out.write, self._quote_buffer)
+            self.out.write("\n")
             self._quote_buffer = []
 
     # -- Wiki engine
@@ -1260,7 +1384,7 @@ class Formatter(object):
                 self.close_indentation()
                 self.close_list()
                 self.close_def_list()
-                self.out.write('<hr />' + os.linesep)
+                self.out.write(line + os.linesep)
                 continue
             # Handle new paragraph
             if line == '':
@@ -1269,6 +1393,7 @@ class Formatter(object):
                 self.close_indentation()
                 self.close_list()
                 self.close_def_list()
+                self.out.write(os.linesep)                
                 continue
 
             # Tab expansion and clear tabstops if no indent
@@ -1525,8 +1650,7 @@ class InlineHtmlFormatter(object):
         """
         # FIXME: compatibility code only for now
         out = StringIO()
-        OneLinerFormatter(self.env, self.context).format(self.wikidom, out,
-                                                         shorten)
+        OneLinerFormatter().format(self.wikidom, out, shorten)
         return Markup(out.getvalue())
 
 
@@ -1548,8 +1672,8 @@ def format_to_html(env, context, wikidom, escape_newlines=None):
 def format_to_oneliner(env, context, wikidom, shorten=None):
     if not wikidom:
         return Markup()
-    if shorten is None:
-        shorten = context.get_hint('shorten_lines', False)
+    #if shorten is None:
+    #    shorten = context.get_hint('shorten_lines', False)
     return InlineHtmlFormatter(env, context, wikidom).generate(shorten)
 
 def extract_link(env, context, wikidom):

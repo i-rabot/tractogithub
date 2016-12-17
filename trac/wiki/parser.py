@@ -23,6 +23,76 @@ import re
 from trac.core import *
 from trac.notification import EMAIL_LOOKALIKE_PATTERN
 
+
+# Trac normally does these as well:
+"""
+    'anchor',
+      'anchorlabel',
+      'anchorname',
+    'definition',
+    'email',
+    'htmlescape',
+    'i0',
+    'i1',
+    'i2',
+    'ifl_label',
+    'ifl_page',
+    'indent',
+      'idepth',
+    'inlinecode2', # works without ``
+      'inline2',
+    'linebreak_wc',
+    'list',
+      'ldepth',
+      'lstart',
+    'macrolink',
+    'proc_pname',
+      'proc_pval',
+    'strike',      # works without ~~
+    'subscript',
+    'superscript',
+    'table_cell',
+      'table_cell_last',
+      'table_cell_sep',
+    'table_row_sep',
+      'table_row_params',
+    'underline',
+    'wiki_label',
+    'wiki_page',
+"""
+
+
+GITHUB_CONVERTED = set([
+    'revision',
+    'revision2',
+    'ticketref',
+    'bold',
+    'bold_wc',
+    'bolditalic',
+    'heading',
+    'inlinecode',
+    'italic',
+    'italic_wc',
+    'lhref',    
+    'shref',
+    'shrefbr',
+])
+#helpers:
+"""
+    'hanchor',
+    'hdepth',
+    'htext',
+    'inline',
+    'snsbr',
+    'stgtbr',
+    'rel',
+    'lns',
+    'ltgt',
+    'label',
+    'sns',
+    'stgt',
+"""
+
 class WikiParser(Component):
     """Wiki text parser."""
 
@@ -81,9 +151,9 @@ class WikiParser(Component):
         r"(?P<subscript>!?%s)" % SUBSCRIPT_TOKEN,
         r"(?P<superscript>!?%s)" % SUPERSCRIPT_TOKEN,
         r"(?P<inlinecode>!?%s(?P<inline>.*?)%s)" \
-        % (STARTBLOCK_TOKEN, ENDBLOCK_TOKEN),
+           % (STARTBLOCK_TOKEN, ENDBLOCK_TOKEN),
         r"(?P<inlinecode2>!?%s(?P<inline2>.*?)%s)" \
-        % (INLINE_TOKEN, INLINE_TOKEN),
+           % (INLINE_TOKEN, INLINE_TOKEN),
         ]
 
     # Rules provided by IWikiSyntaxProviders will be inserted here
@@ -99,8 +169,8 @@ class WikiParser(Component):
         r"(?P<htmlescape>[&<>])",
         # wiki:TracLinks or intertrac:wiki:TracLinks
         r"(?P<shref>!?((?P<sns>%s):(?P<stgt>%s:(?:%s)|%s|%s(?:%s*%s)?)))" \
-        % (LINK_SCHEME, LINK_SCHEME, QUOTED_STRING, QUOTED_STRING,
-           SHREF_TARGET_FIRST, SHREF_TARGET_MIDDLE, SHREF_TARGET_LAST),
+            % (LINK_SCHEME, LINK_SCHEME, QUOTED_STRING, QUOTED_STRING,
+               SHREF_TARGET_FIRST, SHREF_TARGET_MIDDLE, SHREF_TARGET_LAST),
         # [wiki:TracLinks with optional label] or [/relative label]
         (r"(?P<lhref>!?\[(?:"
          r"(?P<rel>%s)|" % LHREF_RELATIVE_TARGET + # ./... or /...
@@ -122,9 +192,9 @@ class WikiParser(Component):
         # definition:: 
         r"(?P<definition>^\s+"
         r"((?:%s[^%s]*%s|%s(?:%s{,2}[^%s])*?%s|[^%s%s:]|:[^:])+::)(?:\s+|$))"
-        % (INLINE_TOKEN, INLINE_TOKEN, INLINE_TOKEN,
-           STARTBLOCK_TOKEN, ENDBLOCK[0], ENDBLOCK[0], ENDBLOCK_TOKEN,
-           INLINE_TOKEN, STARTBLOCK[0]),
+            % (INLINE_TOKEN, INLINE_TOKEN, INLINE_TOKEN,
+               STARTBLOCK_TOKEN, ENDBLOCK[0], ENDBLOCK[0], ENDBLOCK_TOKEN,
+               INLINE_TOKEN, STARTBLOCK[0]),
         # |- row separator
         r"(?P<table_row_sep>!?\s*\|-+\s*"
         r"(?P<table_row_params>%s\s*)*)" % PROCESSOR_PARAM,
@@ -133,6 +203,11 @@ class WikiParser(Component):
         # || table ||
         r"(?P<table_cell>!?(?P<table_cell_sep>=?(?:\|\|)+=?)"
         r"(?P<table_cell_last>\s*\\?$)?)",
+        
+        #For GitHub kb
+        r"(?P<revision>!?\br(?P<rev>[0-9]+)\b)",
+        r"(?P<revision2>!?\[(?P<rev2>[0-9]+)\])",
+        r"(?P<ticketref>!?#(?P<ticketid>[0-9]+)\b)",
         ]
 
     _processor_re = re.compile(PROCESSOR)
@@ -188,17 +263,19 @@ class WikiParser(Component):
     def _prepare_rules(self):
         from trac.wiki.api import WikiSystem
         if not self._compiled_rules:
+            helper_re = re.compile(r'\?P<([a-z\d_]+)>')
             helpers = []
             handlers = {}
-            syntax = self._pre_rules[:]
+            syntax = [r for r in self._pre_rules if helper_re.search(r).group(1) in GITHUB_CONVERTED]
             i = 0
             for resolver in WikiSystem(self.env).syntax_providers:
                 for regexp, handler in resolver.get_wiki_syntax() or []:
-                    handlers['i' + str(i)] = handler
-                    syntax.append('(?P<i%d>%s)' % (i, regexp))
+                    name = 'i' + str(i)
+                    if name in GITHUB_CONVERTED:
+                        handlers[name] = handler
+                        syntax.append('(?P<i%d>%s)' % (i, regexp))
                     i += 1
-            syntax += self._post_rules[:]
-            helper_re = re.compile(r'\?P<([a-z\d_]+)>')
+            syntax += [r for r in self._post_rules if helper_re.search(r).group(1) in GITHUB_CONVERTED]
             for rule in syntax:
                 helpers += helper_re.findall(rule)[1:]
             rules = re.compile('(?:' + '|'.join(syntax) + ')', re.UNICODE)
