@@ -717,7 +717,12 @@ class Formatter(object):
                 "https://trac.retailarchitects.com/trac/wiki/%s" % target)
         if ns == 'ticket':
             # ticket:123
-            return self._ticketref(match, long(target))
+            try:
+                ticket = long(target)
+            except ValueError:
+                pass
+            else:
+                return self._ticketref(match, ticket)
         return match        
 
     def _lhref_formatter(self, match, fullmatch):
