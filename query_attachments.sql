@@ -5,4 +5,5 @@ SELECT
   time / 1000000 as PosixTime,
   author 
 from attachment
+where type = 'ticket'
 order by id asc
