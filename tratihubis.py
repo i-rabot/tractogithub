@@ -260,7 +260,7 @@ _gitpath = None
 _calls = collections.deque()
 
 _FakeMilestone = collections.namedtuple('_FakeMilestone', ['number', 'title'])
-_FakeIssue = collections.namedtuple('_FakeIssue', ['number', 'title', 'body', 'state'])
+_FakeIssue = collections.namedtuple('_FakeIssue', ['number', 'title', 'body', 'state', 'comments'])
 
 
 class _ConfigError(Exception):
@@ -676,7 +676,6 @@ def migrateTickets(repo,
                 if milestoneTitle:
                     if milestoneTitle not in existingMilestones:
                         _log.info(u'add milestone: %s', milestoneTitle)
-                        print existingMilestones
                         if not pretend:
                             _apiPauseIfNeeded(True)
                             newMilestone = repo.create_milestone(milestoneTitle)
@@ -686,6 +685,7 @@ def migrateTickets(repo,
                                 _FakeMilestone(len(existingMilestones) + 1, 
                                     milestoneTitle)
                         existingMilestones[milestoneTitle] = newMilestone
+                        _log.debug("%r" % existingMilestones)
                     milestone = existingMilestones[milestoneTitle]
                     milestoneNumber = milestone.number
 
@@ -724,7 +724,7 @@ def migrateTickets(repo,
                     labels)
                 _apiCreationIncrement()
             else:
-                issue = _FakeIssue(fakeIssueId, title, body, 'open')
+                issue = _FakeIssue(fakeIssueId, title, body, 'open', 0)
                 fakeIssueId += 1
             _log.info(u'  issue #%s: owner=%s-->%s; milestone=%s (%d)',
                     issue.number, 
@@ -829,13 +829,15 @@ def _createTracToGithubUserMap(definition):
                 raise _ConfigError(_OPTION_USERS, u'Github user must not be empty: "%s"' % mapping)
             if tracUser == '""':
                 tracUser = ''
+            if githubUser == '""':
+                githubUser = ''
             existingMappedGithubUser = result.get(tracUser)
             if existingMappedGithubUser is not None:
                 raise _ConfigError(_OPTION_USERS,
                     u'Trac user "%s" must be mapped to only one Github user instead of "%s" and "%s"'
                      % (tracUser, existingMappedGithubUser, githubUser))
             result[tracUser] = githubUser
-            if githubUser != '*':
+            if githubUser not in ('*', ''):
                 _validateGithubUser(tracUser, githubUser)
     return result
 
@@ -851,7 +853,7 @@ def _githubUserFor(tracToGithubUserMap, tracUser, validate=True):
             raise _ConfigError(_OPTION_USERS, u'Trac user "%s" must be mapped to a Github user' % tracUser)
     if result == '*':
         result = tracUser
-    if validate:
+    if validate and result:
         _validateGithubUser(tracUser, result)
     return result
 
