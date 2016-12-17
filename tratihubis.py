@@ -215,26 +215,32 @@ import tokenize
 import datetime
 import time
 import collections
+import re
 
-LEGACY_COMMENT_TEMPLATE=u"""_Imported from trac ticket {id}.
+TIMESTAMP_FORMAT = "%b %d, %Y, %-I:%M:%S %p"
+
+LEGACY_HEADER_TEMPLATE=u"""_Imported from trac ticket {id}.
 Created by {reporter}
-Opened: {createdtime}
-Last modified: {modifiedtime}{freshdesk}_"""
+Opened in trac: {createdtime}
+Last modified in trac: {modifiedtime}{freshdesk}_"""
 
-FORMAT = "%(asctime)-15s %(levelname)-5.5s %(message)s"
-logging.basicConfig(level=logging.INFO, format=FORMAT)
+LOG_FORMAT = "%(asctime)-15s %(levelname)-5.5s %(message)s"
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 _log = logging.getLogger('tratihubis')
 
 __version__ = "0.5"
 
 ALLOWED_PER_MIN = 20
 LIMIT_BUFFER = 10
+_NOTSET = github.GithubObject.NotSet
 _SECTION = 'tratihubis'
 _OPTION_LABELS = 'labels'
 _OPTION_USERS = 'users'
+_OPTION_KEYWORDS = 'keywords'
 
 _validatedGithubUsers = {}
 _hub = None
+_gitpath = None
 _calls = collections.deque()
 
 _FakeMilestone = collections.namedtuple('_FakeMilestone', ['number', 'title'])
@@ -291,14 +297,17 @@ class _UnicodeCsvReader:
 
 
 class _LabelTransformations(object):
-    def __init__(self, repo, definition):
+    def __init__(self, repo, definition, keywords):
         assert repo is not None
         self.repo = repo
         self._transformations = []
         self._labelMap = {}
-        if definition:
+        if definition or keywords:
             self._buildLabelMap()
-            self._buildTransformations(definition)
+            if definition:
+                self._buildTransformations(definition)
+            if keywords:
+                self._keywordSetUp(keywords)
 
     def _buildLabelMap(self):
         _log.info(u'analyze existing labels')
@@ -361,6 +370,18 @@ class _LabelTransformations(object):
             else:
                 assert False, u'state=%r' % state
 
+    def _keywordSetUp(self, keywords):
+        assert keywords
+        import string
+        self._keywords = {}
+        keywords = filter(None, map(string.strip, keywords.split(',')))
+        for kw in keywords:
+            if kw not in self._labelMap:
+                raise _ConfigError(_OPTION_KEYWORDS,
+                    'unknown keyword "%s" must be manually '
+                    'added to repository as Label' % kw)
+            self._keywords[re.compile(r"\b%s\b" % kw)] = self._labelMap[kw]
+
     def labelFor(self, tracField, tracValue):
         assert tracField
         assert tracValue is not None
@@ -376,6 +397,10 @@ class _LabelTransformations(object):
                 transformationIndex += 1
         return result
 
+    def labelsForKeyWords(self, keywords):
+        return [label.name for regex, label in 
+            self._keywords.items() if 
+            regex.search(keywords)]
 
 def _getConfigOption(config, name, required=True, defaultValue=None):
     try:
@@ -400,12 +425,24 @@ def _shortened(text):
     return result
 
 
+def _timeFormatter(tractime):
+    if tractime:
+        dt = datetime.datetime.fromtimestamp(long(tractime))
+        return dt.strftime(TIMESTAMP_FORMAT)
+    return u''
+
+
+def _convertWikiToMd(txt, currentticket):
+    from trac.wiki.formatter import trac_to_github
+    return trac_to_github(txt, _gitpath, currentticket)
+
+
 def _tracTicketMaps(ticketsCsvPath):
     """
     Sequence of maps where each items describes the relevant fields of each row from the tickets CSV exported
     from Trac.
     """
-    EXPECTED_COLUMN_COUNT = 12
+    EXPECTED_COLUMN_COUNT = 13
     _log.info(u'read ticket details from "%s"', ticketsCsvPath)
     with open(ticketsCsvPath, "rb") as ticketCsvFile:
         csvReader = _UnicodeCsvReader(ticketCsvFile)
@@ -420,17 +457,19 @@ def _tracTicketMaps(ticketsCsvPath):
                 ticketMap = {
                     'id': long(row[0]),
                     'type': row[1],
-                    'owner': row[2],
-                    'reporter': row[3],
-                    'milestone': row[4],
+                    'owner': row[2] and row[2].strip(),
+                    'reporter': row[3] and row[3].strip(),
+                    'milestone': row[4] and row[4].strip(),
                     'status': row[5],
                     'resolution': row[6],
                     'summary': row[7],
-                    'description': row[8],
-                    'createdtime': datetime.datetime.fromtimestamp(long(row[9])),
-                    'modifiedtime': datetime.datetime.fromtimestamp(long(row[10])),
-                    'freshdesk': row[11] and 
-                        u"\nFreshdesk: https://retailarchitects.freshdesk.com/helpdesk/tickets/%s" % row[11],
+                    'description': _convertWikiToMd(row[8], long(row[0])),
+                    'createdtime': _timeFormatter(row[9]),
+                    'modifiedtime': _timeFormatter(row[10]),
+                    'freshdesk': u"\nFreshdesk: "
+                        "[{0}](https://retailarchitects.freshdesk.com/helpdesk/tickets/{0})".format(row[11]) 
+                            if row[11] else '',
+                    'keywords': row[12],
                 }
                 yield ticketMap
             else:
@@ -466,7 +505,7 @@ def _createIssueMap(repo):
 
 
 def _createTicketToCommentsMap(commentsCsvPath):
-    EXPECTED_COLUMN_COUNT = 4
+    EXPECTED_COLUMN_COUNT = 5
     result = {}
     if commentsCsvPath is not None:
         _log.info(u'read ticket comments from "%s"', commentsCsvPath)
@@ -482,16 +521,19 @@ def _createTicketToCommentsMap(commentsCsvPath):
                 if hasReadHeader:
                     commentMap = {
                         'id': long(row[0]),
-                        'date': datetime.datetime.fromtimestamp(long(row[1])),
+                        'date': _timeFormatter(row[1]),
                         'author': row[2],
-                        'body': row[3],
+                        'type': row[3],
+                        'body': row[4],
+                        'padding': u' ',
                     }
-                    ticketId = commentMap['id']
-                    ticketComments = result.get(ticketId)
-                    if ticketComments is None:
-                        ticketComments = []
-                        result[ticketId] = ticketComments
-                    ticketComments.append(commentMap)
+                    if commentMap['type'] == 'comment':
+                        commentMap['padding'] = u'\n\n'
+                        commentMap['body'] = _convertWikiToMd(row[4], commentMap['id'])
+                    elif commentMap['type'] == 'status':
+                        commentMap['type'] = 'status change'
+                        commentMap['body'] = u"**%s**" % commentMap['body']
+                    result.setdefault(commentMap['id'], []).append(commentMap)
                 else:
                     hasReadHeader = True
     return result
@@ -500,16 +542,13 @@ def _createTicketToCommentsMap(commentsCsvPath):
 def _createTicketsToAttachmentsMap(attachmentsCsvPath, attachmentsPrefix):
     EXPECTED_COLUMN_COUNT = 4
     result = {}
-
     if attachmentsCsvPath is not None and attachmentsPrefix is None:
         _log.error(u'attachments csv path specified but attachmentsprefix is not\n')
         return result
-
     if attachmentsCsvPath is not None:
         _log.info(u'read attachments from "%s"', attachmentsCsvPath)
     else:
         return result
-
     with open(attachmentsCsvPath, "rb") as attachmentsCsvFile:
         attachmentsReader = _UnicodeCsvReader(attachmentsCsvFile)
         hasReadHeader = False
@@ -524,13 +563,10 @@ def _createTicketsToAttachmentsMap(attachmentsCsvPath, attachmentsPrefix):
                     'id': long(row[0]),
                     'author': row[3],
                     'filename': row[1],
-                    'date': datetime.datetime.fromtimestamp(long(row[2])),
+                    'date': _timeFormatter(row[2]),
                     'fullpath': u'%s/%s/%s' % (attachmentsPrefix, row[0], row[1]),
                 }
-                if not attachmentMap['id'] in result:
-                    result[attachmentMap['id']] = [attachmentMap]
-                else:
-                    result[attachmentMap['id']].append(attachmentMap)
+                result.setdefault(attachmentMap['id'], []).append(attachmentMap)
             else:
                 hasReadHeader = True
     return result
@@ -541,41 +577,51 @@ def migrateTickets(repo,
         commentsCsvPath=None, 
         attachmentsCsvPath=None, 
         firstTicketIdToConvert=1,
-        lastTicketIdToConvert=0, 
+        lastTicketIdToConvert=0,
         labelMapping=None, 
         userMapping="*:*", 
         attachmentsPrefix=None, 
+        keywords=None,
         pretend=True):
     assert _hub is not None
     assert repo is not None
     assert ticketsCsvPath is not None
     assert userMapping is not None
-
+    
     tracTicketToCommentsMap = _createTicketToCommentsMap(commentsCsvPath)
     tracTicketToAttachmentsMap = _createTicketsToAttachmentsMap(attachmentsCsvPath, attachmentsPrefix)
     existingIssues = _createIssueMap(repo)
     existingMilestones = _createMilestoneMap(repo)
     tracToGithubUserMap = _createTracToGithubUserMap(userMapping)
-    labelTransformations = _LabelTransformations(repo, labelMapping)
+    labelTransformations = _LabelTransformations(repo, labelMapping, keywords)
 
     def possiblyAddLabel(labels, tracField, tracValue):
         label = labelTransformations.labelFor(tracField, tracValue)
         if label is not None:
             _log.info('  add label %s', label.name)
-            if not pretend:
-                labels.append(label.name)
+            labels.append(label.name)
+    
+    def labelsFromKeywords(labels, keywords):
+        kwlabels = labelTransformations.labelsForKeyWords(keywords)
+        for l in kwlabels:
+            _log.info('  add label "%s" from keywords "%s"' % (l, keywords))
+        labels.extend(kwlabels)
 
     fakeIssueId = 1 + len(existingIssues)
     for ticketMap in _tracTicketMaps(ticketsCsvPath):
         ticketId = ticketMap['id']
         title = ticketMap['summary']
-        if (ticketId >= firstTicketIdToConvert) \
-                and ((ticketId <= lastTicketIdToConvert) or (lastTicketIdToConvert == 0)):
+        if ticketId >= firstTicketIdToConvert and \
+           (ticketId <= lastTicketIdToConvert or lastTicketIdToConvert == 0):
             body = ticketMap['description']
-            tracOwner = ticketMap['owner'].strip()
+            tracOwner = ticketMap['owner']
+            if body and \
+               ticketMap['reporter'] and \
+               ticketMap['reporter'] != tracOwner:
+                body = u"_by %s:_\n%s" % (ticketMap['reporter'], body)
             githubAssignee = _githubUserFor(tracToGithubUserMap, tracOwner)
             githubAssignee = _getGitHubUser(githubAssignee)
-            milestoneTitle = ticketMap['milestone'].strip()
+            milestoneTitle = ticketMap['milestone']
             if milestoneTitle:
                 if milestoneTitle not in existingMilestones:
                     _log.info(u'add milestone: %s', milestoneTitle)
@@ -593,44 +639,54 @@ def migrateTickets(repo,
                 milestone = None
                 milestoneNumber = 0
             _log.info(u'convert ticket #%d: %s', ticketId, _shortened(title))
+
+            legacyInfo = LEGACY_HEADER_TEMPLATE.format(**ticketMap)
+            attachmentInfo = u''
+            attachmentsToAdd = tracTicketToAttachmentsMap.get(ticketId)
+            if attachmentsToAdd:
+                for attachment in attachmentsToAdd:
+                    attachmentAuthor = _githubUserFor(tracToGithubUserMap, attachment['author'], False)
+                    attachmentInfo += u"* %s attached [%s](%s) on %s\n"  \
+                        % (attachment['author'], attachment['filename'], attachment['fullpath'], attachment['date'])
+                    _log.info(u'  added attachment from %s', attachmentAuthor)
+            # Add trac info, then body
+            body = legacyInfo + "\n***\n" + body
+            if attachmentInfo:
+                body += "\n***\n" + attachmentInfo
+
+            labels = []
+            possiblyAddLabel(labels, 'type', ticketMap['type'])
+            possiblyAddLabel(labels, 'resolution', ticketMap['resolution'])
+            labelsFromKeywords(labels, ticketMap['keywords'])
+
             if not pretend:
                 _apiPauseIfNeeded(True)
-                if milestone is None:
-                    issue = repo.create_issue(title, body, githubAssignee)
-                else:
-                    issue = repo.create_issue(title, body, githubAssignee, milestone)
+                if not milestone:
+                    milestone = _NOTSET
+                if not labels:
+                    labels = _NOTSET
+                issue = repo.create_issue(
+                    title, 
+                    body, 
+                    githubAssignee, 
+                    milestone, 
+                    labels)
                 _apiCreationIncrement()
             else:
                 issue = _FakeIssue(fakeIssueId, title, body, 'open')
                 fakeIssueId += 1
             _log.info(u'  issue #%s: owner=%s-->%s; milestone=%s (%d)',
                     issue.number, tracOwner, githubAssignee.name, milestoneTitle, milestoneNumber)
-            labels = []
-            possiblyAddLabel(labels, 'type', ticketMap['type'])
-            possiblyAddLabel(labels, 'resolution', ticketMap['resolution'])
-            if labels:
-                _apiPauseIfNeeded()
-                issue.edit(labels=labels)
-
-            legacyInfo = LEGACY_COMMENT_TEMPLATE.format(**ticketMap)
-            attachmentsToAdd = tracTicketToAttachmentsMap.get(ticketId)
-            if attachmentsToAdd is not None:
-                for attachment in attachmentsToAdd:
-                    attachmentAuthor = _githubUserFor(tracToGithubUserMap, attachment['author'], False)
-                    legacyInfo += u"* %s attached [%s](%s) on %s\n"  \
-                        % (attachment['author'], attachment['filename'], attachment['fullpath'], attachment['date'])
-                _log.info(u'  added attachment from %s', attachmentAuthor)
-
-            if not pretend:
-                _addGitHubIssueComment(issue, legacyInfo)
 
             commentsToAdd = tracTicketToCommentsMap.get(ticketId)
             if commentsToAdd is not None:
                 for comment in commentsToAdd:
                     commentAuthor = _githubUserFor(tracToGithubUserMap, comment['author'], False)
-                    commentBody = u'_Trac comment%s on %s:_\n\n%s' % (
+                    commentBody = u'_Trac %s%s on %s:_%s%s' % (
+                        comment['type'],
                         ' by %s' % comment['author'] if comment['author'] else '', 
-                        comment['date'], 
+                        comment['date'],
+                        comment['padding'],
                         comment['body'])
                     _log.info(u'  add comment by %s: %r', commentAuthor, _shortened(commentBody))
                     if not pretend:
@@ -653,7 +709,6 @@ def _addGitHubIssueComment(issue, commentBody):
 
 def _parsedOptions(arguments):
     assert arguments is not None
-
     # Parse command line options.
     Usage = 'usage: %prog [options] CONFIGFILE\n\n  Convert Trac tickets to Github issues.'
     parser = optparse.OptionParser(
@@ -671,9 +726,7 @@ def _parsedOptions(arguments):
         parser.error(u"unknown options must be removed: %s" % others[1:])
     if options.verbose:
         _log.setLevel(logging.DEBUG)
-
     configPath = others[0]
-
     return options, configPath
 
 
@@ -755,7 +808,7 @@ def _apiPauseIfNeeded(iscreation=False):
 def _apiCreationRequestPause():
     # only ALLOWED_PER_MIN creation requests per min
     def calcCount():
-        pastmin = datetime.datetime.now() - datetime.timedelta(seconds=61)
+        pastmin = datetime.datetime.now() - datetime.timedelta(seconds=62)
         while _calls and _calls[0][1] < pastmin:
             _calls.popleft()
         return sum(c[0] for c in _calls)
@@ -763,7 +816,7 @@ def _apiCreationRequestPause():
     _log.debug("\t\t\t%d creations in last min" % callcnt)
     while callcnt >= ALLOWED_PER_MIN:
         since = (datetime.datetime.now() - _calls[0][1]).seconds
-        sec = max(1, 61 - since)
+        sec = max(2, 62 - since)
         _log.info("BREATHER: GitHub gets mad if over %d creation "
             "calls per minute.  We've made %d.  Sleep for %d sec" % 
             (ALLOWED_PER_MIN, callcnt, sec))
@@ -797,20 +850,23 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv
     global _hub
+    global _gitpath
     exitCode = 1
     try:
         options, configPath = _parsedOptions(argv[1:])
         config = ConfigParser.SafeConfigParser()
         config.read(configPath)
         commentsCsvPath = _getConfigOption(config, 'comments', False)
+        _gitpath = _getConfigOption(config, 'gitpath', False)
         attachmentsCsvPath = _getConfigOption(config, 'attachments', False)
         attachmentsPrefix = _getConfigOption(config, 'attachmentsprefix', False)
-        labelMapping = _getConfigOption(config, 'labels', False)
+        labelMapping = _getConfigOption(config, _OPTION_LABELS, False)
+        keywords = _getConfigOption(config, _OPTION_KEYWORDS, False)
         password = _getConfigOption(config, 'password')
         repoName = _getConfigOption(config, 'repo')
         ticketsCsvPath = _getConfigOption(config, 'tickets', False, 'tickets.csv')
         user = _getConfigOption(config, 'user')
-        userMapping = _getConfigOption(config, 'users', False, '*:*')
+        userMapping = _getConfigOption(config, _OPTION_USERS, False, '*:*')
         if not options.really:
             _log.warning(u'no actions are performed unless command line option --really is specified')
         _log.info(u'log on to github as user "%s"', user)
@@ -831,6 +887,7 @@ def main(argv=None):
             userMapping=userMapping,
             labelMapping=labelMapping, 
             attachmentsPrefix=attachmentsPrefix, 
+            keywords=keywords,
             pretend=not options.really)
         exitCode = 0
     except (EnvironmentError, OSError, _ConfigError, _CsvDataError), error:
