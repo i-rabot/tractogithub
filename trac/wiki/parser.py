@@ -65,6 +65,7 @@ from trac.notification import EMAIL_LOOKALIKE_PATTERN
 GITHUB_CONVERTED = set([
     'revision',
     'revision2',
+    'br',
     'ticketref',
     'bold',
     'bold_wc',
@@ -161,6 +162,8 @@ class WikiParser(Component):
     _post_rules = [
         # WikiCreole line breaks
         r"(?P<linebreak_wc>!?\\\\)", 
+        # [[BR]]  (kb added)
+        r"(?P<br>!?\[\[[Bb][Rr]\]\])",
         # e-mails
         r"(?P<email>!?%s)" % EMAIL_LOOKALIKE_PATTERN,
         # <wiki:Trac bracket links>

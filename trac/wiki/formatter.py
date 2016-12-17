@@ -487,7 +487,7 @@ class FakeEnvironment(Component, ComponentManager):
     def component_activated(self, comp):
         comp.env = self
 
-        
+_svn_cache = {}        
 
 class Formatter(object):
     """Base Wiki formatter.
@@ -575,6 +575,10 @@ class Formatter(object):
                 break
         return tmp
 
+    def _br_formatter(self, match, fullmatch):
+        # [[BR]]
+        return os.linesep
+
     def _ticketref_formatter(self, match, fullmatch):
         """ #123 """
         return self._ticketref(match, long(fullmatch.group('ticketid')))
@@ -603,13 +607,17 @@ class Formatter(object):
         return match
 
     def git_commit_from_svn_rev(self, svn_rev):
+        if svn_rev in _svn_cache:
+            return _svn_cache[svn_rev]
         # Find git commit for svn revision
-        return self._command_from_trunk([
+        val = self._command_from_trunk([
             'git',
             'log',
             '--no-color',
             '--pretty=format:%H',
             '--grep=git-svn-id: .*trunk@%s ' % svn_rev])[0] or None
+        _svn_cache[svn_rev] = val
+        return val
 
     def _command_from_trunk(self, cmd):
         os.chdir(_gitpath)
