@@ -1397,7 +1397,8 @@ class Formatter(object):
                 self.close_indentation()
                 self.close_list()
                 self.close_def_list()
-                self.out.write(line + os.linesep)
+                # For GitHub, lets use underscores... they work better
+                self.out.write('___' + os.linesep)
                 continue
             # Handle new paragraph
             if line == '':
