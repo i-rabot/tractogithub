@@ -35,6 +35,7 @@ store the following in ``~/mytool/tratihubis.cfg``::
   tickets = /Users/me/mytool/tickets.csv
   comments = /Users/me/mytool/comments.csv
 
+(You may also remove password and instead set TRATIHUBIS_PASSWD environment variable)
 Then run::
 
   $ tratihubis ~/mytool/tratihubis.cfg
@@ -954,7 +955,14 @@ def main(argv=None):
         attachmentsPrefix = _getConfigOption(config, 'attachmentsprefix', False)
         labelMapping = _getConfigOption(config, _OPTION_LABELS, False)
         keywords = _getConfigOption(config, _OPTION_KEYWORDS, False)
-        password = _getConfigOption(config, 'password')
+        try:
+            password = config.get(_SECTION, 'password')
+        except ConfigParser.NoOptionError:
+            password = os.getenv('TRATIHUBIS_PASSWD')
+        if not password:
+            raise _ConfigError('password', 
+                "config must contain a value for this option "
+                "(or set the TRATIHUBIS_PASSWD environment variable)")
         repoName = _getConfigOption(config, 'repo')
         ticketsCsvPath = _getConfigOption(config, 'tickets', False, 'tickets.csv')
         user = _getConfigOption(config, 'user')
