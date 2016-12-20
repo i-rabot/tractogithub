@@ -6,4 +6,4 @@ SELECT
   author 
 from attachment
 where type = 'ticket'
-order by id asc
+order by time asc
