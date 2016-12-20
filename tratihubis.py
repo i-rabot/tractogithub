@@ -246,7 +246,8 @@ _log = logging.getLogger('tratihubis')
 
 __version__ = "0.5"
 
-ALLOWED_PER_MIN = 19
+ALLOWED_PER_MIN = 36
+ALLOWED_PER_HR = 300
 LIMIT_BUFFER = 10
 _NOTSET = github.GithubObject.NotSet
 _SECTION = 'tratihubis'
@@ -257,7 +258,11 @@ _OPTION_KEYWORDS = 'keywords'
 _validatedGithubUsers = {}
 _hub = None
 _gitpath = None
-_calls = collections.deque()
+_totalCreations = 0
+_totalIssues = 0
+_lastMinCalls = collections.deque()
+_last40mCalls = collections.deque()
+
 
 _FakeMilestone = collections.namedtuple('_FakeMilestone', ['number', 'title'])
 _FakeIssue = collections.namedtuple('_FakeIssue', ['number', 'title', 'body', 'state', 'comments'])
@@ -455,7 +460,8 @@ def _convertWikiToMd(txt, currentticket):
 
 def _tracTicketMaps(ticketsCsvPath, existingIssues):
     """
-    Sequence of maps where each items describes the relevant fields of each row from the tickets CSV exported
+    Sequence of maps where each items describes the relevant 
+    fields of each row from the tickets CSV exported
     from Trac.
     """
     EXPECTED_COLUMN_COUNT = 13
@@ -617,6 +623,7 @@ def migrateTickets(repo,
         attachmentsPrefix=None, 
         keywords=None,
         pretend=True):
+    global _totalIssues
     assert _hub is not None
     assert repo is not None
     assert ticketsCsvPath is not None
@@ -675,7 +682,6 @@ def migrateTickets(repo,
                     githubAssignee = _NOTSET
                 if milestoneTitle:
                     if milestoneTitle not in existingMilestones:
-                        _log.info(u'add milestone: %s', milestoneTitle)
                         if not pretend:
                             _apiPauseIfNeeded(True)
                             newMilestone = repo.create_milestone(milestoneTitle)
@@ -684,6 +690,7 @@ def migrateTickets(repo,
                             newMilestone = \
                                 _FakeMilestone(len(existingMilestones) + 1, 
                                     milestoneTitle)
+                        _log.info(u'add milestone: %s', milestoneTitle)
                         existingMilestones[milestoneTitle] = newMilestone
                         _log.debug("%r" % existingMilestones)
                     milestone = existingMilestones[milestoneTitle]
@@ -711,11 +718,11 @@ def migrateTickets(repo,
                 labelsFromKeywords(labels, ticketMap['keywords'])
 
             if not pretend:
-                _apiPauseIfNeeded(True)
                 if not milestone:
                     milestone = _NOTSET
                 if not labels:
                     labels = _NOTSET
+                _apiPauseIfNeeded(True)
                 issue = repo.create_issue(
                     title, 
                     body, 
@@ -723,13 +730,14 @@ def migrateTickets(repo,
                     milestone, 
                     labels)
                 _apiCreationIncrement()
+                _totalIssues += 1
             else:
                 issue = _FakeIssue(fakeIssueId, title, body, 'open', 0)
                 fakeIssueId += 1
             _log.info(u'  issue #%s: owner=%s-->%s; milestone=%s (%d)',
                     issue.number, 
                     tracOwner, 
-                    githubAssignee.name if 
+                    githubAssignee.login if 
                         githubAssignee and 
                         githubAssignee is not _NOTSET 
                         else '',
@@ -756,11 +764,11 @@ def migrateTickets(repo,
                     comment['date'],
                     comment['padding'],
                     comment['body'])
+                if not pretend:
+                    _addGitHubIssueComment(issue, commentBody)
                 _log.info(u'  add comment by %s: %r', 
                     comment['author'], 
                     _shortened(commentBody))
-                if not pretend:
-                    _addGitHubIssueComment(issue, commentBody)
         #
         # close ticket if needed
         #
@@ -874,25 +882,32 @@ def _apiPauseIfNeeded(iscreation=False):
     GitHub only allows so many requests per period...
     """
     if iscreation:
-        _apiCreationRequestPause()
+        _apiCreationRequestPause(_lastMinCalls, ALLOWED_PER_MIN, 62, 'min')
+        _apiCreationRequestPause(_last40mCalls, ALLOWED_PER_HR, 3660, 'hour')
     _apiTotalRequestPause()
 
 
-def _apiCreationRequestPause():
-    # only ALLOWED_PER_MIN creation requests per min
+def _apiCreationRequestPause(calls, allowed, periodSeconds, periodName):
+    # only allowed creation requests per period
     def calcCount():
-        pastmin = datetime.datetime.now() - datetime.timedelta(seconds=62)
-        while _calls and _calls[0][1] < pastmin:
-            _calls.popleft()
-        return sum(c[0] for c in _calls)
+        pastPeriod = datetime.datetime.now() \
+            - datetime.timedelta(seconds=periodSeconds)
+        while calls and calls[0][1] < pastPeriod:
+            calls.popleft()
+        return sum(c[0] for c in calls)
     callcnt = calcCount()
-    _log.debug(u"\t\t\t%d creations in last min" % callcnt)
-    while callcnt >= ALLOWED_PER_MIN:
-        since = (datetime.datetime.now() - _calls[0][1]).seconds
-        sec = max(2, 62 - since)
+    _log.info(u"\t\t\t%d creations in last %s" % (callcnt, periodName))
+    while callcnt >= allowed:
+        since = (datetime.datetime.now() - calls[0][1]).seconds
+        sec = max(3, periodSeconds - since)
         _log.info(u"BREATHER: GitHub gets mad if over %d creation "
-            "calls per minute.  We've made %d.  Sleep for %d sec" % 
-            (ALLOWED_PER_MIN, callcnt, sec))
+            "calls per %s.  We've made %d.  Sleep for %d sec%s" % (
+                allowed, 
+                periodName, 
+                callcnt, 
+                sec, 
+                ' (until %s)' % (datetime.datetime.now() + 
+                    datetime.timedelta(seconds=sec)) if sec > 65 else ''))
         time.sleep(sec)
         callcnt = calcCount()
         
@@ -913,10 +928,14 @@ def _apiTotalRequestPause():
 
 
 def _apiCreationIncrement(cnt=1):
+    global _totalCreations
     # avoid user.creation_rate_limit_exceeded
     # Limits and what counts as such an event are not
-    # documented.. guessing
-    _calls.append((cnt, datetime.datetime.now()))
+    # documented.. trial and error
+    call = (cnt, datetime.datetime.now())
+    _lastMinCalls.append(call)
+    _last40mCalls.append(call)
+    _totalCreations += 1
 
 
 def main(argv=None):
@@ -969,6 +988,9 @@ def main(argv=None):
         _log.warning(u"interrupted by user")
     except Exception, error:
         _log.exception(error)
+    finally:
+        _log.info("total issues created: %d" % _totalIssues)
+        _log.info("total content creations: %d" % _totalCreations)
     return exitCode
 
 
