@@ -288,7 +288,7 @@ class WikiProcessor(object):
             langtoken = self.name
         else:
             langtoken = ''
-        return u"```%s\n%s```" % (langtoken, text)
+        return u"```%s\n%s```\n" % (langtoken, text)
 
     def _CommitTicketReference_processor(self, text):
         # just convert the contents as normal
