@@ -235,7 +235,7 @@ PLACEHOLDERTICKET = {
     'status': 'closed',
     'resolution': '',
     'summary': 'placeholder',
-    'description': '_trac conversion placeholder_',
+    'description': '_trac conversion placeholder (no such trac ticket)_',
     'freshdesk': '',
     'keywords': '',
     'exists': False
@@ -705,7 +705,7 @@ def migrateTickets(repo,
                         attachmentInfo += u"* %s attached [%s](%s) on %s\n"  % (
                             attachment['author'], 
                             attachment['filename'], 
-                            attachment['fullpath'], 
+                            attachment['fullpath'].replace(' ','%20'), 
                             attachment['date'])
                         _log.info(u'  added attachment from %s', 
                             attachment['author'])
