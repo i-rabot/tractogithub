@@ -1,7 +1,7 @@
 # tractogithub
 
 
-tractogithub is based on Tratihubis
+tractogithub is based on Tratihubis.
 It also uses a trac implementation hacked (in `wiki/parser.py` and `wiki/formatter.py`)
 to parse code blocks, italics, bold, etc.  See tracformatter/ subdirectory.  (This 
 subdirectory is added to the python path so that `import trac` functions.)
