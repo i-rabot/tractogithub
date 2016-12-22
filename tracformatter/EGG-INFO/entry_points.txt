@@ -1,0 +1,48 @@
+
+        [console_scripts]
+        trac-admin = trac.admin.console:run
+        tracd = trac.web.standalone:main
+
+        [trac.plugins]
+        trac.about = trac.about
+        trac.admin.console = trac.admin.console
+        trac.admin.web_ui = trac.admin.web_ui
+        trac.attachment = trac.attachment
+        trac.db.mysql = trac.db.mysql_backend
+        trac.db.postgres = trac.db.postgres_backend
+        trac.db.sqlite = trac.db.sqlite_backend
+        trac.mimeview.patch = trac.mimeview.patch
+        trac.mimeview.pygments = trac.mimeview.pygments[Pygments]
+        trac.mimeview.rst = trac.mimeview.rst[reST]
+        trac.mimeview.txtl = trac.mimeview.txtl[Textile]
+        trac.prefs = trac.prefs.web_ui
+        trac.search = trac.search.web_ui
+        trac.ticket.admin = trac.ticket.admin
+        trac.ticket.batch = trac.ticket.batch
+        trac.ticket.query = trac.ticket.query
+        trac.ticket.report = trac.ticket.report
+        trac.ticket.roadmap = trac.ticket.roadmap
+        trac.ticket.web_ui = trac.ticket.web_ui
+        trac.timeline = trac.timeline.web_ui
+        trac.versioncontrol.admin = trac.versioncontrol.admin
+        trac.versioncontrol.svn_authz = trac.versioncontrol.svn_authz
+        trac.versioncontrol.web_ui = trac.versioncontrol.web_ui
+        trac.web.auth = trac.web.auth
+        trac.web.session = trac.web.session
+        trac.wiki.admin = trac.wiki.admin
+        trac.wiki.interwiki = trac.wiki.interwiki
+        trac.wiki.macros = trac.wiki.macros
+        trac.wiki.web_ui = trac.wiki.web_ui
+        trac.wiki.web_api = trac.wiki.web_api
+        tracopt.mimeview.enscript = tracopt.mimeview.enscript
+        tracopt.mimeview.php = tracopt.mimeview.php
+        tracopt.mimeview.silvercity = tracopt.mimeview.silvercity[SilverCity]
+        tracopt.perm.authz_policy = tracopt.perm.authz_policy
+        tracopt.perm.config_perm_provider = tracopt.perm.config_perm_provider
+        tracopt.ticket.clone = tracopt.ticket.clone
+        tracopt.ticket.commit_updater = tracopt.ticket.commit_updater
+        tracopt.ticket.deleter = tracopt.ticket.deleter
+        tracopt.versioncontrol.git.git_fs = tracopt.versioncontrol.git.git_fs
+        tracopt.versioncontrol.svn.svn_fs = tracopt.versioncontrol.svn.svn_fs
+        tracopt.versioncontrol.svn.svn_prop = tracopt.versioncontrol.svn.svn_prop
+    
