@@ -1,5 +1,7 @@
-Tratihubis
+tractogithub
 ==========
+
+tractogithub is based on Tratihubis
 
 Tratihubis converts Trac tickets to Github issues by using the following steps:
 
