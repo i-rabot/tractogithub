@@ -603,7 +603,7 @@ class Formatter(object):
             git_commit = self.git_commit_from_svn_rev(revision)
             if git_commit:
                 # [r1233](../commit/1458f373a79e332c7ad81caa3ea3b6a63f588be1)
-                return u"[%s](../../../RetailArchitects/loft/commit/%s)" % (match, git_commit)
+                return u"[%s](../commit/%s)" % (match, git_commit)
         return match
 
     def git_commit_from_svn_rev(self, svn_rev):
